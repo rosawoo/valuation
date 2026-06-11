@@ -7,7 +7,6 @@ import {
   notifyBillingSubscriptionConfirmed,
 } from "./lib/billingRenewalEmail";
 import { logger } from "./lib/logger";
-import { isStripeStubMode } from "./lib/stripeStub";
 import {
   classifyInheritanceAddonPrice,
   classifyStripePriceId,
@@ -162,11 +161,6 @@ async function hydrateSubscription(client: Stripe, subId: string): Promise<Strip
 }
 
 export async function stripeWebhookHandler(req: Request, res: Response): Promise<void> {
-  if (isStripeStubMode()) {
-    res.json({ received: true, stub: true });
-    return;
-  }
-
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   if (!secret || !stripeKey) {

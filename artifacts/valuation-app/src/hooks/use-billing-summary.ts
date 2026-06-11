@@ -19,7 +19,6 @@ function devSimulatedMeBilling(planSlug: StubBillingPlanSlug, hasInheritanceAddo
     tier: hasPaidValuationTier ? "pro" : "free",
     status: hasPaidValuationTier ? "dev_sim_active" : "inactive",
     stripeCustomerId: null,
-    stripeStub: true,
     planSlug: apiPlanSlug,
     valuationsThisMonth: 0,
     valuationsMonthLimit,
@@ -37,7 +36,6 @@ export type MeBillingResponse = {
   tier: string;
   status: string;
   stripeCustomerId: string | null;
-  stripeStub?: boolean;
   planSlug: string;
   valuationsThisMonth?: number;
   valuationsMonthLimit: number | null;

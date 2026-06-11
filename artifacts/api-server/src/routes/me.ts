@@ -4,7 +4,6 @@ import { z } from "zod";
 import { db, estimatesTable, listingsTable, billingSubscriptionsTable } from "@workspace/db";
 import { requireAuth, type AuthedRequest } from "../middlewares/requireAuth";
 import { isAuthStubMode } from "../lib/authStub";
-import { isStripeStubMode } from "../lib/stripeStub";
 import { getUserAlertPrefs, upsertUserAlertPrefs } from "../lib/userAlertPrefs";
 import {
   isEmailDeliveryConfigured,
@@ -195,7 +194,6 @@ router.get("/me/billing", requireAuth, async (req, res): Promise<void> => {
       tier: ent.tier,
       status: ent.hasPaidValuationTier ? "stub_active" : "inactive",
       stripeCustomerId: null,
-      stripeStub: isStripeStubMode(),
       planSlug: ent.planSlug === "none" ? "none" : ent.planSlug,
       hasInheritanceAddon: Boolean(ent.hasInheritanceAddon),
       valuationsThisMonth: ent.valuationsThisMonth,
@@ -217,7 +215,6 @@ router.get("/me/billing", requireAuth, async (req, res): Promise<void> => {
     tier: ent.tier,
     status: ent.subscriptionStatus,
     stripeCustomerId: sub?.stripeCustomerId ?? null,
-    stripeStub: isStripeStubMode(),
     planSlug: ent.planSlug === "none" ? "none" : ent.planSlug,
     hasInheritanceAddon: Boolean(ent.hasInheritanceAddon),
     valuationsThisMonth: ent.valuationsThisMonth,

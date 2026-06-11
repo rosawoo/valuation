@@ -5,18 +5,13 @@ function truthy(v: string | undefined): boolean {
   return v === "1" || v?.toLowerCase() === "true";
 }
 
-/** Skip real Stripe SDK calls for local UX without dashboard keys. */
-export function isStripeStubMode(): boolean {
-  return truthy(process.env.STRIPE_STUB_MODE);
-}
-
 let warnedStripeStubEntitlementsOutsideDev = false;
 
 /**
  * Enables entitlement overlays driven by `STRIPE_STUB_PLAN` when:
  * `DISABLE_STRIPE_STUB_ENTITLEMENTS` is not `1`, and (`NODE_ENV=development`, or explicit `ALLOW_STRIPE_STUB_ENTITLEMENTS=1`).
  *
- * This path is unrelated to Stripe Checkout mocking (`STRIPE_STUB_MODE`); unsafe on public deployments.
+ * Unsafe on public deployments.
  */
 export function shouldTrustStripeStubEntitlementsFromEnv(): boolean {
   if (process.env.DISABLE_STRIPE_STUB_ENTITLEMENTS === "1") return false;
@@ -57,7 +52,7 @@ export function stripeStubPlanResolutionMode(): StripeStubPlanResolutionMode {
 
 /**
  * Reads `STRIPE_STUB_PLAN` / `STRIPE_STUB_INHERITANCE_ADDON` when trusted (see {@link shouldTrustStripeStubEntitlementsFromEnv}),
- * independently of Stripe Checkout mocking (`STRIPE_STUB_MODE`). Merge into `resolveUserEntitlements` per {@link stripeStubPlanResolutionMode}.
+ * Merge into `resolveUserEntitlements` per {@link stripeStubPlanResolutionMode}.
  *
  * Empty `STRIPE_STUB_PLAN` means no env overlay (use DB or SPA stub headers).
  */

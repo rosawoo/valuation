@@ -103,7 +103,7 @@ async function postBilling(
   path: string,
   getToken: () => Promise<string | null | undefined>,
   jsonBody: Record<string, unknown> = {},
-): Promise<{ url?: string; error?: string; stub?: boolean }> {
+): Promise<{ url?: string; error?: string }> {
   const token = await getToken();
   const res = await fetch(apiUrl(`/api/billing/${path}`), {
     method: "POST",
@@ -381,7 +381,7 @@ function SettingsPageInner({
   const checkout = async () => {
     setBusy("checkout");
     try {
-      const { url, error, stub } = await postBilling(
+      const { url, error } = await postBilling(
         "checkout-session",
         getToken,
         {
@@ -392,9 +392,6 @@ function SettingsPageInner({
         toast({ title: "Checkout unavailable", description: error, variant: "destructive" });
         return;
       }
-      if (stub) {
-        toast({ title: "Billing preview", description: "Checkout is mocked locally; no payment is processed." });
-      }
       if (url) window.location.href = url;
     } finally {
       setBusy(null);
@@ -404,13 +401,10 @@ function SettingsPageInner({
   const portal = async () => {
     setBusy("portal");
     try {
-      const { url, error, stub } = await postBilling("customer-portal", getToken, {});
+      const { url, error } = await postBilling("customer-portal", getToken, {});
       if (error) {
         toast({ title: "Billing portal", description: error, variant: "destructive" });
         return;
-      }
-      if (stub) {
-        toast({ title: "Billing preview", description: "Customer portal link is mocked locally." });
       }
       if (url) window.location.href = url;
     } finally {
@@ -421,16 +415,10 @@ function SettingsPageInner({
   const checkoutInheritanceAddon = async () => {
     setBusy("inheritance-addon");
     try {
-      const { url, error, stub } = await postBilling("checkout-session-inheritance-addon", getToken, {});
+      const { url, error } = await postBilling("checkout-session-inheritance-addon", getToken, {});
       if (error) {
         toast({ title: "Inheritance checkout unavailable", description: error, variant: "destructive" });
         return;
-      }
-      if (stub) {
-        toast({
-          title: "Billing preview",
-          description: "Inheritance addon checkout is mocked locally; no payment is processed.",
-        });
       }
       if (url) window.location.href = url;
     } finally {
@@ -790,10 +778,7 @@ function SettingsPageInner({
               variant="outline"
               className="w-full gap-2"
               onClick={() => void portal()}
-              disabled={
-                busy !== null ||
-                (!billing?.stripeCustomerId && !billing?.stripeStub)
-              }
+              disabled={busy !== null || !billing?.stripeCustomerId}
             >
               Manage subscription / invoices
             </Button>

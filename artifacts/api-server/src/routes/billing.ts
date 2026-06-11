@@ -5,7 +5,6 @@ import { eq } from "drizzle-orm";
 import { db, billingSubscriptionsTable } from "@workspace/db";
 import { requireAuth, type AuthedRequest } from "../middlewares/requireAuth";
 import { logger } from "../lib/logger";
-import { isStripeStubMode } from "../lib/stripeStub";
 import { publicAppBaseUrl } from "../lib/emailDelivery";
 
 const router: IRouter = Router();
@@ -36,14 +35,6 @@ function parseTrialDaysProfessional(): number | undefined {
 
 router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<void> => {
   const baseUrl = billingBaseUrl();
-  if (isStripeStubMode()) {
-    res.json({
-      url: `${baseUrl.replace(/\/$/, "")}/settings?checkout=stub`,
-      stub: true,
-    });
-    return;
-  }
-
   const stripe = getStripe();
 
   const body = CheckoutSessionBody.safeParse(typeof req.body === "object" && req.body !== null ? req.body : {});
@@ -132,14 +123,6 @@ router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<
 
 router.post("/billing/checkout-session-inheritance-addon", requireAuth, async (req, res): Promise<void> => {
   const baseUrl = billingBaseUrl();
-  if (isStripeStubMode()) {
-    res.json({
-      url: `${baseUrl.replace(/\/$/, "")}/settings?checkout=stub&addon=inheritance`,
-      stub: true,
-    });
-    return;
-  }
-
   const stripe = getStripe();
   const inh = process.env.STRIPE_PRICE_INHERITANCE_ADDON?.trim();
 
@@ -206,14 +189,6 @@ router.post("/billing/checkout-session-inheritance-addon", requireAuth, async (r
 
 router.post("/billing/customer-portal", requireAuth, async (req, res): Promise<void> => {
   const baseUrl = billingBaseUrl();
-  if (isStripeStubMode()) {
-    res.json({
-      url: `${baseUrl.replace(/\/$/, "")}/settings?portal=stub`,
-      stub: true,
-    });
-    return;
-  }
-
   const stripe = getStripe();
   if (!stripe) {
     res.status(503).json({ error: "Stripe is not configured." });

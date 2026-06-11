@@ -188,7 +188,6 @@ Set in the API process environment (see `load-env`, route handlers, and `lib/llm
 ## Local and safety switches
 
 - **`AUTH_STUB_MODE`**: bypasses Clerk and uses a fixed user id (must not be used in production; see `assertStubNotProduction`).
-- **`isStripeStubMode()`**: short-circuits Stripe calls for dev/testing where configured.
 
 ## Related documentation
 
