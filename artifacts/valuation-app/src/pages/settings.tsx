@@ -155,6 +155,7 @@ function SettingsPageInner({
   );
   const [busy, setBusy] = useState<string | null>(null);
   const [checkoutPlan, setCheckoutPlan] = useState<"everyday_plus" | "professional">("everyday_plus");
+  const [discountCode, setDiscountCode] = useState("");
 
   const refreshEmailAlerts = useCallback(async () => {
     try {
@@ -381,11 +382,13 @@ function SettingsPageInner({
   const checkout = async () => {
     setBusy("checkout");
     try {
+      const trimmedCode = discountCode.trim();
       const { url, error } = await postBilling(
         "checkout-session",
         getToken,
         {
           plan: checkoutPlan,
+          ...(trimmedCode ? { promotionCode: trimmedCode } : {}),
         },
       );
       if (error) {
@@ -755,6 +758,21 @@ function SettingsPageInner({
                       <SelectItem value="professional">Professional · £19.99/mo</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="discount-code">Discount code</Label>
+                  <Input
+                    id="discount-code"
+                    value={discountCode}
+                    onChange={(e) => setDiscountCode(e.target.value)}
+                    placeholder="Optional"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Codes are plan-specific. Everyday and Professional each need their own Stripe promotion code, or
+                    leave blank to enter one on the Stripe checkout page.
+                  </p>
                 </div>
               </>
             ) : (

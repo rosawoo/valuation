@@ -12,8 +12,50 @@ const router: IRouter = Router();
 const CheckoutSessionBody = z
   .object({
     plan: z.enum(["everyday_plus", "professional"]).default("everyday_plus"),
+    /** Customer-facing Stripe promotion code (Everyday or Professional checkout). */
+    promotionCode: z.string().trim().min(1).max(64).optional(),
   })
   .strict();
+
+type CheckoutPromotionResult =
+  | { ok: true; promotionCodeId: string }
+  | { ok: false; error: string };
+
+async function resolveCheckoutPromotionCode(
+  stripe: Stripe,
+  code: string,
+  priceId: string,
+): Promise<CheckoutPromotionResult> {
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return { ok: false, error: "Enter a discount code or leave the field blank." };
+  }
+
+  const list = await stripe.promotionCodes.list({ code: trimmed, active: true, limit: 1 });
+  const promo = list.data[0];
+  if (!promo) {
+    return { ok: false, error: "That discount code is not valid or has expired." };
+  }
+  if (promo.expires_at != null && promo.expires_at * 1000 < Date.now()) {
+    return { ok: false, error: "That discount code has expired." };
+  }
+  if (promo.max_redemptions != null && promo.times_redeemed >= promo.max_redemptions) {
+    return { ok: false, error: "That discount code has reached its redemption limit." };
+  }
+
+  const price = await stripe.prices.retrieve(priceId);
+  const productId = typeof price.product === "string" ? price.product : price.product?.id;
+  const couponId = typeof promo.coupon === "string" ? promo.coupon : promo.coupon.id;
+  const coupon = await stripe.coupons.retrieve(couponId);
+  const restrictedProducts = coupon.applies_to?.products;
+  if (restrictedProducts?.length) {
+    if (!productId || !restrictedProducts.includes(productId)) {
+      return { ok: false, error: "That discount code does not apply to the selected plan." };
+    }
+  }
+
+  return { ok: true, promotionCodeId: promo.id };
+}
 
 function billingBaseUrl(): string {
   return publicAppBaseUrl();
@@ -97,6 +139,25 @@ router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<
   const trialDays =
     body.data.plan === "professional" ? parseTrialDaysProfessional() : undefined;
 
+  const promotionCodeRaw = body.data.promotionCode?.trim();
+  let checkoutDiscounts: Stripe.Checkout.SessionCreateParams.Discount[] | undefined;
+  let allowPromotionCodes = true;
+  if (promotionCodeRaw) {
+    try {
+      const resolved = await resolveCheckoutPromotionCode(stripe, promotionCodeRaw, primaryPrice);
+      if (!resolved.ok) {
+        res.status(400).json({ error: resolved.error });
+        return;
+      }
+      checkoutDiscounts = [{ promotion_code: resolved.promotionCodeId }];
+      allowPromotionCodes = false;
+    } catch (err) {
+      logger.error({ err, plan: body.data.plan }, "Stripe promotion code lookup failed");
+      res.status(502).json({ error: "Could not validate that discount code. Try again shortly." });
+      return;
+    }
+  }
+
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -109,6 +170,7 @@ router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<
         metadata: { clerkUserId: userId, planSlug: planSlugMeta },
         ...(trialDays != null ? { trial_period_days: trialDays } : {}),
       },
+      ...(checkoutDiscounts ? { discounts: checkoutDiscounts } : { allow_promotion_codes: allowPromotionCodes }),
     });
     if (!session.url) {
       res.status(502).json({ error: "Stripe did not return a checkout URL." });
