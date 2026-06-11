@@ -67,6 +67,49 @@ function getStripe(): Stripe | null {
   return new Stripe(key);
 }
 
+function stripePlanPriceIds(): {
+  everyday: string | undefined;
+  professional: string | undefined;
+  legacyPro: string | undefined;
+} {
+  return {
+    everyday: process.env.STRIPE_PRICE_EVERYDAY_PLUS?.trim(),
+    professional: process.env.STRIPE_PRICE_PROFESSIONAL?.trim(),
+    legacyPro: process.env.STRIPE_PRICE_PRO?.trim(),
+  };
+}
+
+function resolvePlanPriceId(
+  plan: "everyday_plus" | "professional",
+  prices: ReturnType<typeof stripePlanPriceIds>,
+): string | undefined {
+  return plan === "professional"
+    ? prices.professional ?? prices.legacyPro
+    : prices.everyday ?? prices.legacyPro;
+}
+
+function stripeCheckoutConfigError(
+  plan: "everyday_plus" | "professional",
+  prices: ReturnType<typeof stripePlanPriceIds>,
+): string | null {
+  const missing: string[] = [];
+  if (!getStripe()) missing.push("STRIPE_SECRET_KEY");
+
+  const priceId = resolvePlanPriceId(plan, prices);
+  if (!priceId) {
+    if (plan === "professional") {
+      if (!prices.professional && !prices.legacyPro) {
+        missing.push("STRIPE_PRICE_PROFESSIONAL (or legacy STRIPE_PRICE_PRO)");
+      }
+    } else if (!prices.everyday && !prices.legacyPro) {
+      missing.push("STRIPE_PRICE_EVERYDAY_PLUS (or legacy STRIPE_PRICE_PRO)");
+    }
+  }
+
+  if (missing.length === 0) return null;
+  return `Stripe billing is not configured. Missing: ${missing.join(", ")}. Add them to the repo root .env and restart the API server.`;
+}
+
 function parseTrialDaysProfessional(): number | undefined {
   const raw = process.env.STRIPE_PROFESSIONAL_TRIAL_DAYS?.trim();
   if (!raw) return 14;
@@ -85,21 +128,12 @@ router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<
     return;
   }
 
-  const everyday = process.env.STRIPE_PRICE_EVERYDAY_PLUS?.trim();
-  const professional = process.env.STRIPE_PRICE_PROFESSIONAL?.trim();
-  const legacyPro = process.env.STRIPE_PRICE_PRO?.trim();
+  const prices = stripePlanPriceIds();
+  const primaryPrice = resolvePlanPriceId(body.data.plan, prices);
 
-  const primaryPrice =
-    body.data.plan === "professional"
-      ? professional ?? legacyPro
-      : everyday ?? legacyPro;
-
-  if (!stripe || !primaryPrice) {
-    res.status(503).json({
-      error:
-        "Stripe billing is not configured. Set STRIPE_SECRET_KEY and Everyday / Professional Stripe Price IDs " +
-        "(see STRIPE_PRICE_EVERYDAY_PLUS, STRIPE_PRICE_PROFESSIONAL, or fallback STRIPE_PRICE_PRO).",
-    });
+  const configError = stripeCheckoutConfigError(body.data.plan, prices);
+  if (configError || !stripe || !primaryPrice) {
+    res.status(503).json({ error: configError ?? "Stripe billing is not configured." });
     return;
   }
 
