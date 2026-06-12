@@ -44,7 +44,7 @@ type EmailAlertsInfo = {
 
 type EmailTestKind = "connectivity" | "estimate_ready" | "monitor_value";
 
-type BillingActionJson = { url?: string; error?: string; stub?: boolean };
+type BillingActionJson = { url?: string; error?: string; priceId?: string; stub?: boolean };
 
 /** Blob downloads: anchor must be in the document; revoking the object URL immediately can cancel the save. */
 function triggerBlobDownload(blob: Blob, filename: string) {
@@ -121,7 +121,11 @@ async function postBilling(
   const data = parsed.body;
   if (!res.ok) {
     const code = `${res.status} ${res.statusText}`.trim();
-    return { error: data.error ?? code ?? "Billing request failed" };
+    const priceHint =
+      typeof data.priceId === "string" && data.priceId.trim()
+        ? ` (price: ${data.priceId.trim()})`
+        : "";
+    return { error: (data.error ?? code ?? "Billing request failed") + priceHint };
   }
 
   return data;
@@ -769,10 +773,6 @@ function SettingsPageInner({
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    Codes are plan-specific. Everyday and Professional each need their own Stripe promotion code, or
-                    leave blank to enter one on the Stripe checkout page.
-                  </p>
                 </div>
               </>
             ) : (

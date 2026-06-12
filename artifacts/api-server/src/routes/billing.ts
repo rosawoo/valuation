@@ -118,6 +118,127 @@ function parseTrialDaysProfessional(): number | undefined {
   return Math.round(n);
 }
 
+type BillingReadinessCheck = {
+  ok: boolean;
+  error?: string;
+  priceId?: string;
+};
+
+async function checkStripePrice(
+  stripe: Stripe,
+  priceId: string | undefined,
+): Promise<BillingReadinessCheck> {
+  if (!priceId) {
+    return { ok: false, error: "Price ID env var is not set." };
+  }
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    if (!price.active) {
+      return { ok: false, priceId, error: "Price exists but is not active in Stripe." };
+    }
+    if (!price.recurring) {
+      return { ok: false, priceId, error: "Price is not a recurring subscription price." };
+    }
+    return { ok: true, priceId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not load price from Stripe.";
+    return { ok: false, priceId, error: message };
+  }
+}
+
+function stripeCheckoutFailureMessage(err: unknown): string {
+  if (err instanceof Stripe.errors.StripeError) {
+    return err.message;
+  }
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  return "Could not start checkout. Try again shortly.";
+}
+
+async function ensureStripeCustomerId(
+  stripe: Stripe,
+  userId: string,
+  existingCustomerId: string | null | undefined,
+): Promise<string> {
+  if (existingCustomerId) {
+    try {
+      const customer = await stripe.customers.retrieve(existingCustomerId);
+      if (!("deleted" in customer) || !customer.deleted) {
+        return existingCustomerId;
+      }
+    } catch (err) {
+      const missing =
+        err instanceof Stripe.errors.StripeError && err.code === "resource_missing";
+      if (!missing) {
+        throw err;
+      }
+      logger.warn(
+        { userId, customerId: existingCustomerId },
+        "Stale Stripe customer id; creating a new customer",
+      );
+    }
+  }
+
+  const customer = await stripe.customers.create({
+    metadata: { clerkUserId: userId },
+  });
+
+  await db
+    .insert(billingSubscriptionsTable)
+    .values({
+      userId,
+      stripeCustomerId: customer.id,
+      stripeSubscriptionId: null,
+      stripeInheritanceSubscriptionId: null,
+      status: "inactive",
+      tier: "free",
+      planSlug: null,
+      hasInheritanceAddon: false,
+    })
+    .onConflictDoUpdate({
+      target: billingSubscriptionsTable.userId,
+      set: { stripeCustomerId: customer.id, updatedAt: new Date() },
+    });
+
+  return customer.id;
+}
+
+router.get("/billing/readiness", async (_req, res): Promise<void> => {
+  const stripe = getStripe();
+  const prices = stripePlanPriceIds();
+
+  if (!stripe) {
+    res.status(503).json({
+      ok: false,
+      error: "STRIPE_SECRET_KEY is not configured.",
+      checks: {
+        secretKey: false,
+        everyday: { ok: false, error: "Stripe client unavailable." },
+        professional: { ok: false, error: "Stripe client unavailable." },
+      },
+    });
+    return;
+  }
+
+  const everydayPrice = resolvePlanPriceId("everyday_plus", prices);
+  const professionalPrice = resolvePlanPriceId("professional", prices);
+  const [everyday, professional] = await Promise.all([
+    checkStripePrice(stripe, everydayPrice),
+    checkStripePrice(stripe, professionalPrice),
+  ]);
+
+  const ok = everyday.ok && professional.ok;
+  res.status(ok ? 200 : 503).json({
+    ok,
+    checks: {
+      secretKey: true,
+      everyday,
+      professional,
+    },
+  });
+});
+
 router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<void> => {
   const baseUrl = billingBaseUrl();
   const stripe = getStripe();
@@ -143,28 +264,13 @@ router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<
     .from(billingSubscriptionsTable)
     .where(eq(billingSubscriptionsTable.userId, userId));
 
-  let customerId = existing?.stripeCustomerId ?? undefined;
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      metadata: { clerkUserId: userId },
-    });
-    customerId = customer.id;
-    await db
-      .insert(billingSubscriptionsTable)
-      .values({
-        userId,
-        stripeCustomerId: customerId,
-        stripeSubscriptionId: null,
-        stripeInheritanceSubscriptionId: null,
-        status: "inactive",
-        tier: "free",
-        planSlug: null,
-        hasInheritanceAddon: false,
-      })
-      .onConflictDoUpdate({
-        target: billingSubscriptionsTable.userId,
-        set: { stripeCustomerId: customerId, updatedAt: new Date() },
-      });
+  let customerId: string;
+  try {
+    customerId = await ensureStripeCustomerId(stripe, userId, existing?.stripeCustomerId);
+  } catch (err) {
+    logger.error({ err, userId }, "Stripe customer setup failed before checkout");
+    res.status(502).json({ error: stripeCheckoutFailureMessage(err) });
+    return;
   }
 
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [{ price: primaryPrice, quantity: 1 }];
@@ -212,8 +318,12 @@ router.post("/billing/checkout-session", requireAuth, async (req, res): Promise<
     }
     res.json({ url: session.url });
   } catch (err) {
-    logger.error({ err }, "Stripe checkout session failed");
-    res.status(502).json({ error: "Could not start checkout. Try again shortly." });
+    logger.error({ err, plan: body.data.plan, priceId: primaryPrice, customerId }, "Stripe checkout session failed");
+    res.status(502).json({
+      error: stripeCheckoutFailureMessage(err),
+      plan: body.data.plan,
+      priceId: primaryPrice,
+    });
   }
 });
 
@@ -236,28 +346,13 @@ router.post("/billing/checkout-session-inheritance-addon", requireAuth, async (r
     .from(billingSubscriptionsTable)
     .where(eq(billingSubscriptionsTable.userId, userId));
 
-  let customerId = existing?.stripeCustomerId ?? undefined;
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      metadata: { clerkUserId: userId },
-    });
-    customerId = customer.id;
-    await db
-      .insert(billingSubscriptionsTable)
-      .values({
-        userId,
-        stripeCustomerId: customerId,
-        stripeSubscriptionId: null,
-        stripeInheritanceSubscriptionId: null,
-        status: "inactive",
-        tier: "free",
-        planSlug: null,
-        hasInheritanceAddon: false,
-      })
-      .onConflictDoUpdate({
-        target: billingSubscriptionsTable.userId,
-        set: { stripeCustomerId: customerId, updatedAt: new Date() },
-      });
+  let customerId: string;
+  try {
+    customerId = await ensureStripeCustomerId(stripe, userId, existing?.stripeCustomerId);
+  } catch (err) {
+    logger.error({ err, userId }, "Stripe customer setup failed before inheritance checkout");
+    res.status(502).json({ error: stripeCheckoutFailureMessage(err) });
+    return;
   }
 
   try {
@@ -279,7 +374,7 @@ router.post("/billing/checkout-session-inheritance-addon", requireAuth, async (r
     res.json({ url: session.url });
   } catch (err) {
     logger.error({ err }, "Stripe inheritance checkout session failed");
-    res.status(502).json({ error: "Could not start inheritance checkout. Try again shortly." });
+    res.status(502).json({ error: stripeCheckoutFailureMessage(err) });
   }
 });
 

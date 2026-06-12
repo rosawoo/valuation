@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import {
   Briefcase,
@@ -29,6 +29,13 @@ import { DashboardHubLower } from "@/components/dashboard/DashboardHubLower";
 import { DashboardOverview } from "@/components/dashboard/DashboardOverview";
 import { PortfolioAssetCard } from "@/components/portfolio/PortfolioAssetCard";
 import { PageTitle } from "@/components/layout/PageTitle";
+import { ReorderableSections } from "@/components/portfolio/ReorderableSections";
+import {
+  loadPortfolioSectionOrder,
+  PORTFOLIO_SECTION_LABELS,
+  savePortfolioSectionOrder,
+  type PortfolioSectionId,
+} from "@/lib/portfolio-layout-order";
 
 type PortfolioItem = EstimateSummary & {
   liveValue: number;
@@ -165,6 +172,11 @@ export default function PortfolioPage() {
   }, [estimateRows, activePortfolio?.id, primaryPortfolio?.id]);
 
   const [listingFor, setListingFor] = useState<EstimateSummary | null>(null);
+  const [sectionOrder, setSectionOrder] = useState<PortfolioSectionId[]>(loadPortfolioSectionOrder);
+
+  useEffect(() => {
+    savePortfolioSectionOrder(sectionOrder);
+  }, [sectionOrder]);
 
   const portfolio = useMemo(() => {
     if (scopedRows.length === 0) return [];
@@ -315,79 +327,103 @@ export default function PortfolioPage() {
         })}
       </nav>
 
-      <DashboardOverview
-        totalPortfolioUsd={totalPortfolioUsd}
-        totalChange={totalChange}
-        formatRollup={formatRollup}
-        pieData={pieData}
-        diversificationScore={diversificationScore}
-        portfolio={portfolio}
-        scopedEstimates={scopedRows}
-      />
-
-      <ProfessionalWorkspaceRollup estimateRows={estimateRows} formatRollup={formatRollup} fxMult={fxMult} />
-
-      {/* Smart folders: drag assets between Hold / Monitor / Sell */}
-      <PortfolioFolders
-        items={portfolio.map((p) => ({
-          id: p.id,
-          title: p.title,
-          assetTypeName: p.assetTypeName,
-          liveValue: p.liveValue,
-          currency: p.currency,
-        }))}
-      />
-
-      {/* Collection: single grouped view (by valuation track), highest approximate value first */}
-      <section className="space-y-8" id="collection-section" data-testid="collection-section">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-foreground">Your collection</h2>
-        </div>
-
-        <div className="space-y-12">
-          {shelfSections.map((section) => {
-            const items = portfolio
-              .filter((p) => p.portfolioShelf === section.shelf)
-              .sort(
-                (a, b) =>
-                  convertToUsdApprox(b.liveValue, b.currency, fxMult) -
-                  convertToUsdApprox(a.liveValue, a.currency, fxMult),
+      <ReorderableSections
+        order={sectionOrder}
+        onReorder={setSectionOrder}
+        labelForId={(id) => PORTFOLIO_SECTION_LABELS[id]}
+        renderSection={(sectionId) => {
+          switch (sectionId) {
+            case "overview":
+              return (
+                <DashboardOverview
+                  totalPortfolioUsd={totalPortfolioUsd}
+                  totalChange={totalChange}
+                  formatRollup={formatRollup}
+                  pieData={pieData}
+                  diversificationScore={diversificationScore}
+                  portfolio={portfolio}
+                  scopedEstimates={scopedRows}
+                />
               );
-            const count = items.length;
-            return (
-              <div key={section.shelf} className="space-y-4" data-testid={`shelf-${section.shelf}`}>
-                <div className="flex flex-col gap-3 border-b border-border/40 pb-4 sm:flex-row sm:items-end sm:justify-between">
-                  <div className="min-w-0 space-y-1.5">
-                    <div className="flex flex-wrap items-baseline gap-2">
-                      <h3 className="text-lg font-semibold tracking-tight text-foreground">{section.title}</h3>
-                      <span className="text-xs tabular-nums text-muted-foreground">
-                        {count} {count === 1 ? "item" : "items"}
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed max-w-prose">
-                      {section.description}
-                    </p>
+            case "pro-workspace":
+              return (
+                <ProfessionalWorkspaceRollup
+                  estimateRows={estimateRows}
+                  formatRollup={formatRollup}
+                  fxMult={fxMult}
+                />
+              );
+            case "folders":
+              return (
+                <PortfolioFolders
+                  items={portfolio.map((p) => ({
+                    id: p.id,
+                    title: p.title,
+                    assetTypeName: p.assetTypeName,
+                    liveValue: p.liveValue,
+                    currency: p.currency,
+                  }))}
+                />
+              );
+            case "collection":
+              return (
+                <section className="space-y-8" id="collection-section" data-testid="collection-section">
+                  <div>
+                    <h2 className="text-2xl font-semibold tracking-tight text-foreground">Your collection</h2>
                   </div>
-                  <div className="shrink-0 sm:text-right">
-                    <p className="text-[11px] text-muted-foreground">Group total (approx.)</p>
-                    <p className="text-lg font-semibold tabular-nums text-foreground">{formatRollup(section.sectionTotalUsd)}</p>
+
+                  <div className="space-y-12">
+                    {shelfSections.map((section) => {
+                      const items = portfolio
+                        .filter((p) => p.portfolioShelf === section.shelf)
+                        .sort(
+                          (a, b) =>
+                            convertToUsdApprox(b.liveValue, b.currency, fxMult) -
+                            convertToUsdApprox(a.liveValue, a.currency, fxMult),
+                        );
+                      const count = items.length;
+                      return (
+                        <div key={section.shelf} className="space-y-4" data-testid={`shelf-${section.shelf}`}>
+                          <div className="flex flex-col gap-3 border-b border-border/40 pb-4 sm:flex-row sm:items-end sm:justify-between">
+                            <div className="min-w-0 space-y-1.5">
+                              <div className="flex flex-wrap items-baseline gap-2">
+                                <h3 className="text-lg font-semibold tracking-tight text-foreground">{section.title}</h3>
+                                <span className="text-xs tabular-nums text-muted-foreground">
+                                  {count} {count === 1 ? "item" : "items"}
+                                </span>
+                              </div>
+                              <p className="text-xs text-muted-foreground leading-relaxed max-w-prose">
+                                {section.description}
+                              </p>
+                            </div>
+                            <div className="shrink-0 sm:text-right">
+                              <p className="text-[11px] text-muted-foreground">Group total (approx.)</p>
+                              <p className="text-lg font-semibold tabular-nums text-foreground">{formatRollup(section.sectionTotalUsd)}</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            {items.map((item) => (
+                              <PortfolioAssetCard
+                                key={item.id}
+                                item={item}
+                                portfolioAnalytics={portfolioAnalytics}
+                                onListing={() => setListingFor(item)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {items.map((item) => (
-                    <PortfolioAssetCard
-                      key={item.id}
-                      item={item}
-                      portfolioAnalytics={portfolioAnalytics}
-                      onListing={() => setListingFor(item)}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+                </section>
+              );
+            case "hub-lower":
+              return <DashboardHubLower {...hubLowerProps} />;
+            default:
+              return null;
+          }
+        }}
+      />
 
       {listingFor && (
         <GenerateListingDialog
@@ -399,8 +435,6 @@ export default function PortfolioPage() {
           onOpenChange={(open) => !open && setListingFor(null)}
         />
       )}
-
-      <DashboardHubLower {...hubLowerProps} />
     </div>
   );
 }
