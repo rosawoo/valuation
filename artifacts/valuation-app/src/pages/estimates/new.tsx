@@ -15,7 +15,6 @@ import {
   Building2,
   Camera,
   Car,
-  Calculator,
   Coins,
   Cpu,
   Disc3,
@@ -85,6 +84,19 @@ import { useToast } from "@/hooks/use-toast";
 import { PhotoUploadCard } from "@/components/PhotoUploadCard";
 import { AssetCategoriesLoadHint } from "@/lib/asset-categories-fetch-hint";
 import { PageTitle } from "@/components/layout/PageTitle";
+import { ValuationProgressScreen } from "@/components/estimate/ValuationProgressScreen";
+import { KnowledgeLevelStep } from "@/components/identification/KnowledgeLevelStep";
+import {
+  ValuationIdentificationStep,
+  type IdentificationCompletePayload,
+} from "@/components/identification/ValuationIdentificationStep";
+import { supportsIdentificationFlow } from "@/lib/identification/profiles";
+import {
+  applyVerificationToForm,
+  verificationToExtraFields,
+  VERIFICATION_COVERED_FIELD_KEYS,
+} from "@/lib/identification/apply-to-form";
+import type { KnowledgeLevel } from "@/lib/identification/types";
 
 const PENDING_KEY = "valyoued.pendingEstimate";
 /** When a type has more driver fields than this, the wizard adds a second "details" step. */
@@ -237,6 +249,8 @@ const SAAS_MICRO_ID = "saas-micro";
 type WizardStepId =
   | "tier"
   | "pickType"
+  | "knowledgeLevel"
+  | "itemVerification"
   | "title"
   | "region"
   | "identity"
@@ -264,6 +278,10 @@ function stepTitle(id: WizardStepId): string {
       return "What kind of item is it?";
     case "pickType":
       return "What are you valuing?";
+    case "knowledgeLevel":
+      return "Do you know exactly what item you have?";
+    case "itemVerification":
+      return "Verify your item";
     case "title":
       return "Short listing headline";
     case "region":
@@ -523,26 +541,6 @@ function NewEstimatePageInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoaded, isSignedIn]);
 
-  const [loadingMessage, setLoadingMessage] = useState("Initializing models...");
-
-  useEffect(() => {
-    if (!createMutation.isPending) return;
-    const messages = [
-      "Pulling comparable sales...",
-      "Gathering price context...",
-      "Scanning world events & news...",
-      "Mapping international arbitrage...",
-      "Synthesizing narrative...",
-      "Finalizing report...",
-    ];
-    let i = 0;
-    const interval = setInterval(() => {
-      i = (i + 1) % messages.length;
-      setLoadingMessage(messages[i]);
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [createMutation.isPending]);
-
   const form = useForm<FormValues>({
     resolver: async (data) => {
       const baseResult = baseSchema.safeParse(data);
@@ -675,10 +673,26 @@ function NewEstimatePageInner({
     }
   }, [selectedType, selectedCategory]);
 
+  const [knowledgeLevel, setKnowledgeLevel] = useState<KnowledgeLevel | null>(null);
+  const [identificationComplete, setIdentificationComplete] = useState(false);
+  const [verificationPayload, setVerificationPayload] = useState<IdentificationCompletePayload | null>(null);
+
+  useEffect(() => {
+    setKnowledgeLevel(null);
+    setIdentificationComplete(false);
+    setVerificationPayload(null);
+  }, [selectedTypeId]);
+
   const { identityFields, driverFieldsPage1, driverFieldsPage2, wizardSteps } = useMemo(() => {
     const c = classifyAssetFields(selectedType);
-    const drivers = c.drivers;
-    const steps: WizardStepId[] = ["tier", "pickType", "title", "region"];
+    const drivers = identificationComplete
+      ? c.drivers.filter((f) => !VERIFICATION_COVERED_FIELD_KEYS.has(f.key))
+      : c.drivers;
+    const steps: WizardStepId[] = ["tier", "pickType"];
+    if (selectedType && supportsIdentificationFlow(selectedType.id)) {
+      steps.push("knowledgeLevel", "itemVerification");
+    }
+    steps.push("title", "region");
     if (c.identity.length) steps.push("identity");
     if (drivers.length) {
       steps.push("valueDrivers");
@@ -691,7 +705,7 @@ function NewEstimatePageInner({
       driverFieldsPage2: drivers.slice(VALUE_DRIVER_STEP_CAP),
       wizardSteps: steps,
     };
-  }, [selectedType]);
+  }, [selectedType, identificationComplete]);
 
   const [wizardStep, setWizardStep] = useState(0);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -796,6 +810,26 @@ function NewEstimatePageInner({
           toast({
             title: "Pick a supported item type",
             description: "Pick a guided template, or choose Anything Else.",
+            variant: "destructive",
+          });
+          return false;
+        }
+        return true;
+      case "knowledgeLevel":
+        if (!knowledgeLevel) {
+          toast({
+            title: "Pick an option",
+            description: "Tell us how well you know your item so we can tailor verification.",
+            variant: "destructive",
+          });
+          return false;
+        }
+        return true;
+      case "itemVerification":
+        if (!identificationComplete) {
+          toast({
+            title: "Complete verification",
+            description: "Finish verifying your item before we generate a valuation.",
             variant: "destructive",
           });
           return false;
@@ -933,6 +967,9 @@ function NewEstimatePageInner({
     }
     if (data.purchaseCurrency) extras.purchaseCurrency = String(data.purchaseCurrency);
     if (data.saleCurrency) extras.saleCurrency = String(data.saleCurrency);
+    if (verificationPayload) {
+      Object.assign(extras, verificationToExtraFields(verificationPayload.answers, verificationPayload.confidence));
+    }
     if (Object.keys(extras).length > 0) payload.extraFields = extras;
 
     const pfResolved = portfolioChoice ?? portfolioCtx?.primaryPortfolio?.id ?? portfoliosList?.[0]?.id;
@@ -1000,19 +1037,10 @@ function NewEstimatePageInner({
 
   if (createMutation.isPending) {
     return (
-      <div className="h-[80vh] flex flex-col items-center justify-center space-y-6">
-        <div className="relative h-24 w-24">
-          <div className="absolute inset-0 rounded-full border-4 border-accent/20"></div>
-          <div className="absolute inset-0 rounded-full border-4 border-accent border-t-transparent animate-spin"></div>
-          <div className="absolute inset-0 flex items-center justify-center text-accent">
-            <Calculator className="h-8 w-8" />
-          </div>
-        </div>
-        <div className="text-center space-y-2">
-          <h2 className="text-2xl font-sans">Valuing asset</h2>
-          <p className="text-muted-foreground text-sm animate-pulse">{loadingMessage}</p>
-        </div>
-      </div>
+      <ValuationProgressScreen
+        itemTitle={String(form.getValues("title") ?? "").trim() || undefined}
+        assetTypeName={selectedType?.name}
+      />
     );
   }
 
@@ -1049,7 +1077,11 @@ function NewEstimatePageInner({
               </h2>
             </CardHeader>
             <CardContent className="space-y-6">
-              {selectedType && currentStepId !== "tier" && currentStepId !== "pickType" && (
+              {selectedType &&
+                currentStepId !== "tier" &&
+                currentStepId !== "pickType" &&
+                currentStepId !== "knowledgeLevel" &&
+                currentStepId !== "itemVerification" && (
                 <div className="space-y-2">
                   <p className="text-sm leading-relaxed text-muted-foreground">
                     After you choose the item template, drag or upload a photo on any step. We auto-fill whatever the
@@ -1261,11 +1293,6 @@ function NewEstimatePageInner({
                                           selectedType.fields.forEach((f) => form.setValue(f.key as any, undefined));
                                         }
                                         field.onChange(type.id);
-                                        requestAnimationFrame(() => {
-                                          if (validateWizardStep("pickType")) {
-                                            setWizardStep((s) => Math.min(s + 1, wizardSteps.length - 1));
-                                          }
-                                        });
                                       }}
                                       data-testid={`asset-type-${type.id}`}
                                       className={`rounded-lg border p-3 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
@@ -1307,6 +1334,32 @@ function NewEstimatePageInner({
                         <FormMessage />
                       </FormItem>
                     );
+                  }}
+                />
+              )}
+
+              {currentStepId === "knowledgeLevel" && selectedType && (
+                <KnowledgeLevelStep
+                  value={knowledgeLevel ?? undefined}
+                  onChange={(level) => {
+                    setKnowledgeLevel(level);
+                    setIdentificationComplete(false);
+                    setVerificationPayload(null);
+                  }}
+                />
+              )}
+
+              {currentStepId === "itemVerification" && selectedType && knowledgeLevel && (
+                <ValuationIdentificationStep
+                  assetTypeId={selectedType.id}
+                  knowledgeLevel={knowledgeLevel}
+                  onComplete={(payload) => {
+                    setVerificationPayload(payload);
+                    setIdentificationComplete(true);
+                    applyVerificationToForm(form, payload.answers, payload.confidence);
+                    requestAnimationFrame(() => {
+                      setWizardStep((s) => Math.min(s + 1, wizardSteps.length - 1));
+                    });
                   }}
                 />
               )}
@@ -1496,6 +1549,11 @@ function NewEstimatePageInner({
 
               {currentStepId === "condition" && (
                 <div className="space-y-3">
+                  {identificationComplete ? (
+                    <p className="rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-xs text-muted-foreground">
+                      Condition was estimated from your verification answers. Adjust the slider if needed.
+                    </p>
+                  ) : null}
                   {selectedType?.id === SAAS_MICRO_ID ? (
                     <p className="flex items-start gap-2 text-sm text-muted-foreground">
                       <span>For software, this score is product maturity, not physical wear.</span>
@@ -1575,30 +1633,32 @@ function NewEstimatePageInner({
             </CardContent>
           </Card>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Button type="button" variant="outline" onClick={goBack} disabled={wizardStep === 0}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
-            <div className="flex flex-wrap gap-2">
-              {currentStepId === "purchasePrice" ? (
-                <Button type="button" variant="ghost" onClick={goNext}>
-                  Skip
-                </Button>
-              ) : null}
-              {currentStepId !== "additional" ? (
-                <Button type="button" onClick={goNext}>
-                  Continue
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              ) : (
-                <Button type="submit" className="shadow-lg">
-                  Generate Valuer Report
-                  <ArrowRight className="ml-2 h-5 w-5" />
-                </Button>
-              )}
+          {currentStepId === "itemVerification" && !identificationComplete ? null : (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Button type="button" variant="outline" onClick={goBack} disabled={wizardStep === 0}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back
+              </Button>
+              <div className="flex flex-wrap gap-2">
+                {currentStepId === "purchasePrice" ? (
+                  <Button type="button" variant="ghost" onClick={goNext}>
+                    Skip
+                  </Button>
+                ) : null}
+                {currentStepId !== "additional" ? (
+                  <Button type="button" onClick={goNext}>
+                    Continue
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button type="submit" className="shadow-lg">
+                    Generate Valuer Report
+                    <ArrowRight className="ml-2 h-5 w-5" />
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </form>
       </Form>
     </div>
